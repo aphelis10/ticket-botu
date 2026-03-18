@@ -1,0 +1,160 @@
+const {
+  Client,
+  GatewayIntentBits,
+  ChannelType,
+  PermissionsBitField,
+  ActionRowBuilder,
+  StringSelectMenuBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  EmbedBuilder
+} = require('discord.js');
+
+const fs = require('fs');
+
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages]
+});
+
+// AYARLAR
+const AYARLAR = {
+  token: "MTQ4MzgxMzI1NjQ3MTUxMTEzMA.GONkfh.Cof8kbyPzVxKvsh9l5NJsXIan-VMKwO7QXTKhI",
+  kategoriID: "1469999093903528125",
+  yetkiliRolID: "1469999093370716234",
+  logKanalID: "1469999095258021994",
+  logoURL: "https://media.discordapp.net/attachments/1419057707230433364/1483214102498115857/logo.png?ex=69bbc086&is=69ba6f06&hm=ad0a19017bfdab993278353ce90159067d768832783497dd9302f3e61363f65b&=&format=webp&quality=lossless"
+};
+
+// veri
+let ticketID = 0;
+const aktifTicketlar = new Map(); // userID -> channelID
+
+// PANEL
+client.on('messageCreate', async (msg) => {
+  if (msg.content === "!panel") {
+
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId("ticket_menu")
+      .setPlaceholder("Ticket türü seç")
+      .addOptions([
+        { label: "Destek", value: "destek" },
+        { label: "Şikayet", value: "sikayet" },
+        { label: "Bug", value: "bug" }
+      ]);
+
+    const row = new ActionRowBuilder().addComponents(menu);
+
+    const embed = new EmbedBuilder()
+      .setTitle("Destek Sistemi")
+      .setDescription("Ticket türünü seç.")
+      .setThumbnail(AYARLAR.logoURL)
+      .setColor("Blue");
+
+    msg.channel.send({ embeds: [embed], components: [row] });
+  }
+});
+
+// INTERACTION
+client.on('interactionCreate', async (interaction) => {
+
+  // 🎯 DROPDOWN
+  if (interaction.isStringSelectMenu() && interaction.customId === "ticket_menu") {
+
+    if (aktifTicketlar.has(interaction.user.id)) {
+      return interaction.reply({
+        content: "Zaten açık ticketın var!",
+        ephemeral: true
+      });
+    }
+
+    ticketID++;
+
+    const tur = interaction.values[0];
+    const idStr = ticketID.toString().padStart(4, "0");
+
+    const kanal = await interaction.guild.channels.create({
+      name: `ticket-${idStr}`,
+      type: ChannelType.GuildText,
+      parent: AYARLAR.kategoriID,
+      permissionOverwrites: [
+        {
+          id: interaction.guild.id,
+          deny: [PermissionsBitField.Flags.ViewChannel]
+        },
+        {
+          id: interaction.user.id,
+          allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages]
+        },
+        {
+          id: AYARLAR.yetkiliRolID,
+          allow: [PermissionsBitField.Flags.ViewChannel]
+        }
+      ]
+    });
+
+    aktifTicketlar.set(interaction.user.id, kanal.id);
+
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId("ticket_kapat")
+        .setLabel("🔒 Kapat")
+        .setStyle(ButtonStyle.Danger)
+    );
+
+    const embed = new EmbedBuilder()
+      .setTitle(`Ticket #${idStr}`)
+      .setDescription(`Tür: ${tur}`)
+      .setThumbnail(AYARLAR.logoURL)
+      .setColor("Green");
+
+    kanal.send({
+      content: `<@${interaction.user.id}> | <@&${AYARLAR.yetkiliRolID}>`,
+      embeds: [embed],
+      components: [row]
+    });
+
+    interaction.reply({ content: `Ticket oluşturuldu (#${idStr})`, ephemeral: true });
+  }
+
+  // 🔒 KAPAT (SADECE YETKİLİ)
+  if (interaction.isButton() && interaction.customId === "ticket_kapat") {
+
+    if (!interaction.member.roles.cache.has(AYARLAR.yetkiliRolID)) {
+      return interaction.reply({
+        content: "Bu ticketı sadece yetkililer kapatabilir!",
+        ephemeral: true
+      });
+    }
+
+    const userID = [...aktifTicketlar.entries()]
+      .find(([_, chID]) => chID === interaction.channel.id)?.[0];
+
+    await interaction.reply({ content: "Kapatılıyor...", ephemeral: true });
+
+    kapatTicket(interaction.channel, userID);
+  }
+});
+
+// KAPAT
+async function kapatTicket(channel, userID) {
+
+  const messages = await channel.messages.fetch({ limit: 100 });
+  const log = messages.map(m => `${m.author.tag}: ${m.content}`).reverse().join("\n");
+
+  fs.writeFileSync(`./${channel.name}.txt`, log);
+
+  const logKanal = channel.guild.channels.cache.get(AYARLAR.logKanalID);
+
+  logKanal.send({
+    content: `📁 ${channel.name} kapandı`,
+    files: [`./${channel.name}.txt`]
+  });
+
+  if (userID) aktifTicketlar.delete(userID);
+
+  setTimeout(() => {
+    channel.delete();
+  }, 2000);
+}
+
+client.login(AYARLAR.token);
